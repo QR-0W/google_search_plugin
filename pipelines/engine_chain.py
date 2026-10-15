@@ -27,7 +27,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-
 def _build_common_cfg(backend: "SearchBackendSection") -> dict[str, Any]:
     return {
         "timeout": backend.timeout,
@@ -65,7 +64,6 @@ def _build_engine_dict(
             {
                 "enabled": engines.tavily_enabled,
                 "api_keys": list(engines.tavily_api_keys),
-                "api_key": engines.tavily_api_key,
                 "search_depth": engines.tavily_search_depth,
                 "include_raw_content": engines.tavily_include_raw_content,
                 "include_answer": engines.tavily_include_answer,
@@ -78,7 +76,6 @@ def _build_engine_dict(
             {
                 "enabled": engines.deepseek_enabled,
                 "api_keys": list(engines.deepseek_api_keys),
-                "api_key": engines.deepseek_api_key,
                 "base_url": engines.deepseek_base_url,
                 "model": engines.deepseek_model,
                 "max_tokens": engines.deepseek_max_tokens,
@@ -89,7 +86,6 @@ def _build_engine_dict(
             {
                 "enabled": engines.you_enabled,
                 "api_keys": list(engines.you_api_keys),
-                "api_key": engines.you_api_key,
                 "freshness": engines.you_freshness,
                 "offset": engines.you_offset,
                 "country": engines.you_country,
@@ -104,7 +100,6 @@ def _build_engine_dict(
             {
                 "enabled": engines.you_news_enabled,
                 "api_keys": list(engines.you_api_keys),
-                "api_key": engines.you_api_key,
             }
         )
     elif engine_name == "you_contents":
@@ -112,7 +107,6 @@ def _build_engine_dict(
             {
                 "enabled": engines.you_contents_enabled,
                 "api_keys": list(engines.you_api_keys),
-                "api_key": engines.you_api_key,
                 "format": engines.you_contents_format,
                 "force": engines.you_contents_force,
             }
@@ -162,26 +156,21 @@ class EngineChain:
             Tuple[list[SearchResult], str]: 搜索结果列表与成功命中的引擎名称;所有引擎都失败时返回 ([], "")
         """
         engines_cfg = self._engines_cfg
-        default_engine = self._backend_cfg.default_engine
 
-        # 引擎优先级:deepseek / tavily / you 系列优先(质量较高的 API 引擎),其余兜底
-        all_engines: list[tuple[str, Any]] = [
-            ("deepseek", self.deepseek),
-            ("tavily", self.tavily),
-            ("you", self.you),
-            ("you_news", self.you_news),
-            ("google", self.google),
-            ("bing", self.bing),
-            ("duckduckgo", self.duckduckgo),
-            ("sogou", self.sogou),
-        ]
-        if default_engine in {pair[0] for pair in all_engines}:
-            ordered = [pair for pair in all_engines if pair[0] == default_engine]
-            ordered.extend(pair for pair in all_engines if pair[0] != default_engine)
-        else:
-            ordered = all_engines
+        # 完全按照用户保存的优先级依次尝试，不额外插入隐藏的优先顺序。
+        engines = {
+            "deepseek": self.deepseek,
+            "tavily": self.tavily,
+            "you": self.you,
+            "you_news": self.you_news,
+            "google": self.google,
+            "bing": self.bing,
+            "duckduckgo": self.duckduckgo,
+            "sogou": self.sogou,
+        }
 
-        for engine_name, engine in ordered:
+        for engine_name in self._backend_cfg.engine_order:
+            engine = engines[engine_name]
             # engines_cfg 是 Pydantic 模型,*_enabled 字段强制为 bool,直接读即可
             if not getattr(engines_cfg, f"{engine_name}_enabled", False):
                 logger.info("引擎 %s 已禁用,跳过", engine_name)

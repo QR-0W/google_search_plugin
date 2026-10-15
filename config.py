@@ -4,9 +4,20 @@
 ``model_config``——Pydantic v2 把这个名字保留给 BaseModel 的元数据属性。
 """
 
-from typing import Literal
+from typing import List, Literal
 
 from maibot_sdk import Field, PluginConfigBase
+from pydantic import field_validator
+
+ENGINE_NAMES = (
+    "deepseek", "tavily", "you", "you_news", "google", "bing", "duckduckgo", "sogou",
+)
+
+
+def legacy_engine_order(default_engine: str) -> List[str]:
+    if default_engine not in ENGINE_NAMES:
+        raise ValueError("旧配置中的默认搜索引擎无效")
+    return sorted(ENGINE_NAMES, key=lambda name: name != default_engine)
 
 # ---------------------------------------------------------------------------
 # Sections
@@ -21,7 +32,7 @@ class PluginSection(PluginConfigBase):
     __ui_order__ = 0
 
     name: str = Field(default="google_search", description="插件名称")
-    version: str = Field(default="4.0.3", description="插件版本")
+    version: str = Field(default="4.0.4", description="插件版本")
     config_version: str = Field(default="4.0.0", description="配置版本(Runner 用于兼容性校验)")
     enabled: bool = Field(default=True, description="是否启用插件")
 
@@ -65,7 +76,7 @@ class ActionsSection(PluginConfigBase):
 
     image_search_enabled: bool = Field(
         default=False,
-        description="是否启用图片搜索功能。支持 Bing、搜狗(国内可直连)和 DuckDuckGo(需翻墙)三个引擎自动降级。",
+        description="按文字关键词找图并向聊天发送一张图片，不是以图搜图。可用后端随引擎开关变化。",
     )
 
 
@@ -76,10 +87,19 @@ class SearchBackendSection(PluginConfigBase):
     __ui_icon__ = "globe"
     __ui_order__ = 3
 
-    default_engine: Literal["google", "bing", "sogou", "duckduckgo", "tavily", "you", "you_news", "deepseek"] = Field(
-        default="bing",
-        description="默认搜索引擎",
+    engine_order: List[str] = Field(
+        default_factory=lambda: legacy_engine_order("bing"),
+        description="拖动每行左侧手柄调整尝试顺序；保留全部引擎名称，是否启用在各引擎卡片中设置。",
+        json_schema_extra={"min_items": len(ENGINE_NAMES), "max_items": len(ENGINE_NAMES)},
     )
+
+    @field_validator("engine_order")
+    @classmethod
+    def validate_engine_order(cls, value: List[str]) -> List[str]:
+        if len(value) != len(ENGINE_NAMES) or set(value) != set(ENGINE_NAMES):
+            raise ValueError("搜索顺序必须包含全部 8 个引擎且不重复，请拖拽排序，不要修改引擎名称")
+        return value
+
     max_results: int = Field(default=15, description="默认返回结果数量")
     timeout: int = Field(default=20, description="搜索超时时间(秒)")
     proxy: str = Field(
@@ -144,16 +164,14 @@ class EnginesSection(PluginConfigBase):
         default_factory=list,
         description="Tavily API key 列表,填写多个时随机选用",
     )
-    tavily_api_key: str = Field(default="", description="Tavily API key;留空则使用环境变量 TAVILY_API_KEY")
     tavily_search_depth: Literal["basic", "advanced"] = Field(default="basic", description="搜索深度")
     tavily_include_raw_content: bool = Field(default=False, description="是否返回网页原始内容")
     tavily_include_answer: bool = Field(default=True, description="是否返回 Tavily 生成的答案")
     tavily_topic: str = Field(
         default="",
         description=(
-            "Tavily topic 参数(general/news);留空表示不传 topic,Tavily 走 general 模式。"
-            "中文电竞/娱乐/社交场景**不建议**指定 news ——Tavily 的 news 索引偏向英文国际"
-            "体育/政治资讯,中文检索准确率会显著下降。"
+            "默认主题：general 为通用检索，news 限定新闻；留空表示不传 topic。"
+            "单次工具调用可覆盖此设置。"
         ),
     )
     tavily_turbo: bool = Field(default=False, description="是否启用 Tavily Turbo 模式")
@@ -165,7 +183,6 @@ class EnginesSection(PluginConfigBase):
         default_factory=list,
         description="You API key 列表,填写多个时随机选用",
     )
-    you_api_key: str = Field(default="", description="You API key;留空则使用环境变量 YOU_API_KEY")
     you_freshness: str = Field(
         default="",
         description="You 搜索时间范围(可选:day/week/month/year;留空表示不限)",
@@ -201,10 +218,6 @@ class EnginesSection(PluginConfigBase):
     deepseek_api_keys: list[str] = Field(
         default_factory=list,
         description="DeepSeek API key 列表,填写多个时随机选用",
-    )
-    deepseek_api_key: str = Field(
-        default="",
-        description="DeepSeek API key;留空则使用环境变量 DEEPSEEK_API_KEY",
     )
     deepseek_base_url: str = Field(
         default="https://api.deepseek.com",

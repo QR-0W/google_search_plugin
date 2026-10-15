@@ -108,4 +108,14 @@ class SearchPipeline:
                 return f"已找到相关结果,但总结服务暂时不可用,可手动查看:\n\n{links}"
             return "搜索服务暂时不可用,请稍后再试。"
 
+        source_results = [
+            r for r in results
+            if r.rank >= 0 and r.title and r.url.startswith(("http://", "https://"))
+        ]
+        sources = "\n".join(
+            f"- {r.title}: {r.url}" for r in source_results[:8]
+            if r.url not in final_answer
+        )
+        if sources:
+            return f"{final_answer}\n\n【参考来源】：\n{sources}"
         return final_answer

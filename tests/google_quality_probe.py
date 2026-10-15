@@ -41,7 +41,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from plugins.google_search_plugin.config import EnginesSection, SearchBackendSection  # noqa: E402
+from plugins.google_search_plugin.config import EnginesSection, SearchBackendSection, legacy_engine_order  # noqa: E402
 from plugins.google_search_plugin.pipelines.content_fetcher import ContentFetcher  # noqa: E402
 from plugins.google_search_plugin.pipelines.zhihu_extractor import ZhihuExtractor  # noqa: E402
 from plugins.google_search_plugin.search_engines.base import SearchResult  # noqa: E402
@@ -89,7 +89,7 @@ def _build_components() -> tuple[GoogleEngine, ContentFetcher]:
     google = GoogleEngine(google_cfg)
 
     backend_cfg = SearchBackendSection(
-        default_engine="google",
+        engine_order=legacy_engine_order("google"),
         max_results=max_results,
         timeout=timeout,
         proxy=proxy,

@@ -13,12 +13,13 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+from typing import Any, Dict, Mapping, Optional, Tuple
 
 from maibot_sdk import Action, Command, MaiBotPlugin, Tool
 from maibot_sdk.types import ActivationType, ToolParameterInfo, ToolParamType
 
-from .config import GoogleSearchPluginConfig
+from .config import GoogleSearchPluginConfig, legacy_engine_order
+from .config_ui import build_webui_layout
 from .pipelines.content_fetcher import ContentFetcher
 from .pipelines.engine_chain import EngineChain
 from .pipelines.image_search_pipeline import ImageSearchPipeline
@@ -35,6 +36,42 @@ class GoogleSearchPlugin(MaiBotPlugin):
     """麦麦联网插件主类"""
 
     config_model = GoogleSearchPluginConfig
+
+    def normalize_plugin_config(self, config_data: Optional[Mapping[str, Any]]) -> Tuple[Dict[str, Any], bool]:
+        """将旧字段归并到唯一配置来源，保留原有搜索顺序和有效密钥池。"""
+        data = dict(config_data) if isinstance(config_data, Mapping) else {}
+        backend = data.get("search_backend", {})
+        if isinstance(backend, Mapping) and "default_engine" in backend:
+            backend = dict(backend)
+            legacy_default = backend.pop("default_engine")
+            if "engine_order" not in backend:
+                backend["engine_order"] = legacy_engine_order(legacy_default)
+            data["search_backend"] = backend
+
+        engines = data.get("engines", {})
+        if isinstance(engines, Mapping):
+            engines = dict(engines)
+            for provider in ("tavily", "you", "deepseek"):
+                legacy_key = f"{provider}_api_key"
+                if legacy_key not in engines:
+                    continue
+                single = engines.pop(legacy_key)
+                keys = engines.get(f"{provider}_api_keys", [])
+                if not isinstance(single, str) or not isinstance(keys, list) or any(not isinstance(key, str) for key in keys):
+                    raise ValueError("API 密钥必须是字符串，密钥列表必须是字符串列表")
+                engines[f"{provider}_api_keys"] = list(dict.fromkeys(
+                    key.strip() for key in [*keys, single] if key.strip()
+                ))
+            data["engines"] = engines
+        normalized, changed = super().normalize_plugin_config(data)
+        return normalized, changed or normalized != config_data
+
+    def get_webui_config_schema(self, **kwargs: Any) -> Dict[str, Any]:
+        backend = self.get_plugin_config_data().get("search_backend", {})
+        return build_webui_layout(
+            super().get_webui_config_schema(**kwargs),
+            engine_order=backend.get("engine_order"),
+        )
 
     # 运行时组件:在 on_load / on_config_update 中装配
     _engine_chain: Optional[EngineChain]
@@ -63,10 +100,10 @@ class GoogleSearchPlugin(MaiBotPlugin):
         self._build_pipelines()
         cfg = self.config
         self.ctx.logger.info(
-            "google_search_plugin v%s 已加载 (model=%s, default_engine=%s, image_search=%s, translation=%s)",
+            "google_search_plugin v%s 已加载 (model=%s, engine_order=%s, image_search=%s, translation=%s)",
             cfg.plugin.version,
             cfg.models.model_name,
-            cfg.search_backend.default_engine,
+            " -> ".join(cfg.search_backend.engine_order),
             cfg.actions.image_search_enabled,
             cfg.translation.enabled,
         )
@@ -244,21 +281,18 @@ class GoogleSearchPlugin(MaiBotPlugin):
 
     @Tool(
         "web_search",
-        description="谷歌搜索工具。当见到有人发出疑问或者遇到不熟悉的事情时候，直接使用它获得最新知识！",
+        description="按关键词或问题检索互联网资料，整理搜索结果并返回答案及来源链接。",
         parameters=[
             ToolParameterInfo(
                 name="question",
                 param_type=ToolParamType.STRING,
-                description="用于搜索引擎的搜索关键词或完整问题(将被原样送入搜索引擎),也可直接传入 URL 获取网页内容",
+                description="搜索关键词或完整问题，将原样送入搜索引擎；兼容单个完整 URL。",
                 required=True,
             ),
             ToolParameterInfo(
                 name="tavily_topic",
                 param_type=ToolParamType.STRING,
-                description=(
-                    "可选:Tavily topic 覆写(general/news);留空表示不传 topic。"
-                    "中文场景不建议指定 news,Tavily news 索引偏向英文体育/政治新闻。"
-                ),
+                description="仅 Tavily 后端生效：general 为通用检索，news 限定新闻；留空使用后台配置。",
                 required=False,
             ),
         ],
@@ -317,17 +351,12 @@ class GoogleSearchPlugin(MaiBotPlugin):
 
     @Tool(
         "abbreviation_translate",
-        description=(
-            "当遇到用户消息中出现难懂的网络用语、缩写、黑话、热词或流行语时，"
-            "主动查询并翻译这些词汇以帮助理解。适用于各种类型的网络语言，"
-            "包括字母缩写（如yyds、u1s1）、网络黑话、当下热词、流行语等。"
-            "应该识别消息中可能让人困惑的网络用语并自动查询其含义。"
-        ),
+        description="查询网络缩写的候选释义；结果可能有多义项或查不到，不保证能解释一般中文热词。",
         parameters=[
             ToolParameterInfo(
                 name="term",
                 param_type=ToolParamType.STRING,
-                description="从用户消息中识别出的网络用语、缩写或热词（如：yyds、躺平、内卷等）",
+                description="要查询的网络缩写，如 yyds、u1s1",
                 required=True,
             ),
             ToolParameterInfo(
@@ -383,14 +412,13 @@ class GoogleSearchPlugin(MaiBotPlugin):
 
     @Action(
         "image_search",
-        description="当用户明确需要搜索图片时使用此动作。例如：'搜索一下猫的图片'、'来张风景图'。",
+        description="按文字关键词搜索并向当前聊天发送一张图片，仅在用户明确要求找图或发图时使用。",
         activation_type=ActivationType.ALWAYS,
-        action_parameters={"query": "需要搜索的图片关键词"},
+        action_parameters={"query": "用于找图的文字关键词"},
         action_require=[
-            "当用户明确表示想看、想搜索或想要一张图片时使用。",
-            "适用于'搜/找/来一张/发一张xx的图片'等指令。",
-            "如果用户只是在普通聊天中提到了某个事物，不代表他想要图片，此时不应使用。",
-            "一次只随机发送一张图片，30 分钟内不重复发送同一图片。",
+            "普通聊天中提到某个事物不代表需要发送图片。",
+            "不用于图片识别、查原图出处或以图搜图。",
+            "一次随机发送一张；同一搜索词在 30 分钟内不重复发送同一图片。",
         ],
         associated_types=["image"],
         parallel_action=False,
@@ -491,6 +519,7 @@ class GoogleSearchPlugin(MaiBotPlugin):
             enabled_engines.append("you_news")
         if e.deepseek_enabled:
             enabled_engines.append("deepseek")
+        enabled_engines.sort(key=cfg.search_backend.engine_order.index)
 
         ready = all(
             v is not None
@@ -508,7 +537,7 @@ class GoogleSearchPlugin(MaiBotPlugin):
         lines = [
             f"google_search_plugin v{cfg.plugin.version}",
             f"模型 task: {cfg.models.model_name}  温度: {cfg.models.temperature}",
-            f"默认引擎: {cfg.search_backend.default_engine}",
+            f"搜索顺序: {' -> '.join(cfg.search_backend.engine_order)}",
             f"启用引擎: {', '.join(enabled_engines) if enabled_engines else '(无)'}",
             f"图片搜索: {'已启用' if cfg.actions.image_search_enabled else '未启用'}",
             f"缩写翻译: {'已启用' if cfg.translation.enabled else '未启用'}",
