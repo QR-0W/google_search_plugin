@@ -1,6 +1,6 @@
 {
   "manifest_version": 2,
-  "version": "4.0.4",
+  "version": "4.0.5",
   "name": "麦麦联网插件(Search Plugin)",
   "description": "支持多个搜索引擎的网络搜索、缩写翻译以及图片搜索，并提供自动降级能力。",
   "author": {
@@ -82,6 +82,11 @@
       "type": "python_package",
       "name": "httpx",
       "version_spec": ">=0.25.0"
+    },
+    {
+      "type": "python_package",
+      "name": "playwright",
+      "version_spec": ">=1.54.0"
     }
   ],
   "capabilities": [

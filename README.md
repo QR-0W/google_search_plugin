@@ -76,6 +76,10 @@ pip install -r requirements.txt -i https://mirrors.aliyun.com/pypi/simple
 - `zhihu_cookies` (str): 知乎专用抓取所需的 Cookie 字符串；配置后，插件会对知乎链接启用专用抓取逻辑。
 - `user_agents` (list[str]): 抓取网页时随机选用的 User-Agent 列表。
 
+百度百科词条使用独立的匿名 Chromium 会话读取，沿用配置的代理和正文超时，不读取账号 Cookie。需要已安装 Playwright 及其 Chromium 浏览器；普通网页仍使用原有 HTTP 抓取。
+
+KKBOX 歌曲链接通过同一歌曲 ID 的官方嵌入页读取歌曲、艺人、专辑和时长，校验歌曲 ID 并标明实际来源；嵌入页不包含原地区网页的完整歌词和专辑说明。正文补充失败时仍保留原有搜索摘要。
+
 ### `[engines]`
 
 配置页分为「搜索」「缩写」「搜图」三页。搜索页将连接、超时和正文参数合并为「搜索设置」，模型参数集中在「总结设置」，每个搜索引擎仍各占一张可折叠卡片。引擎卡片按保存的优先级排列，实际执行直接使用同一份顺序。
