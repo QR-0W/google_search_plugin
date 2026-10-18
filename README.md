@@ -35,11 +35,20 @@ pip install -r requirements.txt -i https://mirrors.aliyun.com/pypi/simple
 
 ## 工作流程
 
-1.  **接收搜索词**: planner 调用 `web_search` 时直接传入搜索关键词（或 URL），插件不再做 LLM 查询重写。
+1.  **接收搜索词**: planner 调用 `web_search` 时直接传入关键词或问题，插件不再做 LLM 查询重写，也不接受单个网页 URL；搜索结果的正文补充不受影响。
 2.  **后端搜索**: 使用该关键词，调用Google、Bing、Tavily 等搜索引擎执行搜索（多引擎自动降级）。
 3.  **内容抓取**: (可选) 抓取搜索结果网页的主要内容（trafilatura/readability/bs4 三级降级；知乎链接走专用抓取）。
 4.  **阅读总结**: 内部LLM阅读所有搜索到的材料。
 5.  **生成答案**: LLM根据阅读的材料，生成最终的总结性答案并返回。
+
+## 独立工具
+
+| 工具 | 输入 | 返回 | 状态 |
+|---|---|---|---|
+| `web_search` | 关键词或问题 | 搜索资料总结与来源 | 随插件启用 |
+| `summarize_webpage` | 单个 HTTP(S) 网页 URL | 模型生成的网页内容总结 | 默认关闭 |
+
+网页总结开关位于「搜索 → 搜索设置 → 启用网页总结工具（summarize_webpage）」，对应 `search_backend.summarize_webpage_enabled`。关闭时该工具仍注册，但不进入 Planner 的可用工具列表；直接调用也不会抓取网页或调用模型。搜索结果正文补充、缩写翻译和搜图开关保持独立。
 
 ## 🔧 配置说明
 

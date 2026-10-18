@@ -32,7 +32,7 @@ class PluginSection(PluginConfigBase):
     __ui_order__ = 0
 
     name: str = Field(default="google_search", description="插件名称")
-    version: str = Field(default="4.0.5", description="插件版本")
+    version: str = Field(default="4.0.6", description="插件版本")
     config_version: str = Field(default="4.0.0", description="配置版本(Runner 用于兼容性校验)")
     enabled: bool = Field(default=True, description="是否启用插件")
 
@@ -105,6 +105,10 @@ class SearchBackendSection(PluginConfigBase):
     proxy: str = Field(
         default="",
         description="HTTP/HTTPS 代理地址,例如 'http://127.0.0.1:7890'。留空表示不走代理。",
+    )
+    summarize_webpage_enabled: bool = Field(
+        default=False,
+        description="向 Planner 提供 summarize_webpage 网页总结工具，默认关闭；不影响搜索结果正文补充。",
     )
     fetch_content: bool = Field(default=True, description="是否抓取网页内容")
     content_timeout: int = Field(default=10, description="内容抓取超时(秒)")

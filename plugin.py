@@ -2,8 +2,9 @@
 
 业务逻辑全部抽到 ``pipelines/`` 子模块,本文件只负责装配 + 派发。
 
-提供三个面向 LLM 的组件:
-- ``@Tool("web_search")``             主搜索工具(支持 URL 直访;搜索词由 planner 直接给出)
+提供四个面向 LLM 的组件:
+- ``@Tool("web_search")``             主搜索工具(仅关键词或问题检索;搜索词由 planner 直接给出)
+- ``@Tool("summarize_webpage")``      指定网页总结(默认关闭,不暴露给 planner)
 - ``@Tool("abbreviation_translate")`` 缩写翻译(神奇海螺 nbnhhsh;关闭时置为禁用态,不暴露给 planner)
 - ``@Action("image_search")``         图片搜索(关闭时置为禁用态,不暴露给 planner)
 
@@ -130,12 +131,13 @@ class GoogleSearchPlugin(MaiBotPlugin):
         """按当前配置给出可开关组件的期望状态: name -> (component_type, enabled)。"""
         cfg = self.config
         return {
+            "summarize_webpage": ("tool", bool(cfg.search_backend.summarize_webpage_enabled)),
             "abbreviation_translate": ("tool", bool(cfg.translation.enabled)),
             "image_search": ("action", bool(cfg.actions.image_search_enabled)),
         }
 
     def get_components(self) -> list[dict[str, Any]]:
-        """收集组件声明,按配置写入初始启用态,并注入 web_search 的 RPC 超时。
+        """收集组件声明,按配置写入初始启用态,并注入搜索与网页总结的 RPC 超时。
 
         关闭功能时不能直接从声明中剔除对应组件:组件不进注册表的话,
         运行时热启用会因"未找到组件"失败,只能重载插件恢复。
@@ -150,14 +152,14 @@ class GoogleSearchPlugin(MaiBotPlugin):
         try:
             states = self._configured_component_states()
         except Exception:  # noqa: BLE001
-            states = {}
+            states = {"summarize_webpage": ("tool", False)}
         web_search_timeout_ms = self._web_search_rpc_timeout_ms()
         for comp in components:
             name = comp.get("name", "")
             metadata = comp.get("metadata")
             if not isinstance(metadata, dict):
                 continue
-            if name == "web_search":
+            if name in {"web_search", "summarize_webpage"}:
                 metadata["timeout_ms"] = web_search_timeout_ms
             state = states.get(name)
             if state is not None:
@@ -286,7 +288,7 @@ class GoogleSearchPlugin(MaiBotPlugin):
             ToolParameterInfo(
                 name="question",
                 param_type=ToolParamType.STRING,
-                description="搜索关键词或完整问题，将原样送入搜索引擎；兼容单个完整 URL。",
+                description="搜索关键词或完整问题，将原样送入搜索引擎；不接受单独的网页 URL。",
                 required=True,
             ),
             ToolParameterInfo(
@@ -316,6 +318,8 @@ class GoogleSearchPlugin(MaiBotPlugin):
         question = (question or "").strip()
         if not question:
             return {"name": "web_search", "content": "问题为空，无法执行搜索。"}
+        if is_url(question):
+            return {"name": "web_search", "content": "web_search 不接受单独的网页链接，请使用网页读取工具。"}
 
         if not self._ensure_pipelines_ready():
             return {"name": "web_search", "content": ""}
@@ -327,23 +331,55 @@ class GoogleSearchPlugin(MaiBotPlugin):
         bot_name = await self._resolve_bot_name()
 
         try:
-            if is_url(question):
-                self.ctx.logger.info("检测到 URL 输入,直接访问并总结: %s", question)
-                content = await self._url_pipeline.run(  # type: ignore[union-attr]
-                    question,
-                    bot_name=bot_name,
-                )
-            else:
-                self.ctx.logger.info("开始执行搜索: %s", question)
-                content = await self._search_pipeline.run(  # type: ignore[union-attr]
-                    question,
-                    bot_name=bot_name,
-                    tavily_topic_override=topic_override,
-                )
+            self.ctx.logger.info("开始执行搜索: %s", question)
+            content = await self._search_pipeline.run(  # type: ignore[union-attr]
+                question,
+                bot_name=bot_name,
+                tavily_topic_override=topic_override,
+            )
             return {"name": "web_search", "content": content}
         except Exception as exc:  # noqa: BLE001
             self.ctx.logger.error("web_search 执行异常: %s", exc, exc_info=True)
             return {"name": "web_search", "content": ""}
+
+    # ---------------------------------------------------------------- #
+    # Tool: summarize_webpage
+    # ---------------------------------------------------------------- #
+
+    @Tool(
+        "summarize_webpage",
+        description="读取指定网页，返回由模型生成的内容总结。",
+        parameters=[
+            ToolParameterInfo(
+                name="url",
+                param_type=ToolParamType.STRING,
+                description="需要读取并总结的单个完整 HTTP(S) 网页 URL。",
+                required=True,
+            ),
+        ],
+    )
+    async def handle_summarize_webpage(self, url: str = "", **kwargs: Any) -> dict[str, str]:
+        """独立网页总结入口，关闭时不抓取或调用模型。"""
+        del kwargs
+        if not self.config.search_backend.summarize_webpage_enabled:
+            return {"name": "summarize_webpage", "content": "网页总结工具已关闭。"}
+
+        url = url.strip()
+        if not is_url(url):
+            return {"name": "summarize_webpage", "content": "请提供单个完整的 HTTP(S) 网页 URL。"}
+        if not self._ensure_pipelines_ready():
+            return {"name": "summarize_webpage", "content": ""}
+
+        bot_name = await self._resolve_bot_name()
+        try:
+            content = await self._url_pipeline.run(  # type: ignore[union-attr]
+                url,
+                bot_name=bot_name,
+            )
+            return {"name": "summarize_webpage", "content": content}
+        except Exception as exc:  # noqa: BLE001
+            self.ctx.logger.error("summarize_webpage 执行异常: %s", exc, exc_info=True)
+            return {"name": "summarize_webpage", "content": ""}
 
     # ---------------------------------------------------------------- #
     # Tool: abbreviation_translate
@@ -540,6 +576,7 @@ class GoogleSearchPlugin(MaiBotPlugin):
             f"搜索顺序: {' -> '.join(cfg.search_backend.engine_order)}",
             f"启用引擎: {', '.join(enabled_engines) if enabled_engines else '(无)'}",
             f"图片搜索: {'已启用' if cfg.actions.image_search_enabled else '未启用'}",
+            f"网页总结工具: {'已启用' if cfg.search_backend.summarize_webpage_enabled else '未启用'}",
             f"缩写翻译: {'已启用' if cfg.translation.enabled else '未启用'}",
             f"组件就绪: {'是' if ready else '否'}",
         ]

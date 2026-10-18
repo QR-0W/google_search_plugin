@@ -19,6 +19,7 @@ _FIELD_LABELS = {
     "max_results": "结果数量上限",
     "proxy": "HTTP(S) 代理",
     "fetch_content": "补充搜索结果正文",
+    "summarize_webpage_enabled": "启用网页总结工具（summarize_webpage）",
     "zhihu_cookies": "知乎 Cookie",
     "timeout": "搜索超时（秒）",
     "content_timeout": "正文抓取超时（秒）",
